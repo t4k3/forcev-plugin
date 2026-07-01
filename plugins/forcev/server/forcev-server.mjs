@@ -9,7 +9,7 @@ import { join } from "node:path";
 if (!process.env.FORCELAB_DATA_DIR) {
   process.env.FORCELAB_DATA_DIR = join(
     homedir(),
-    "Library/Mobile Documents/iCloud~com~takeoff~forcefive/Documents/ForceData"
+    "Library/Mobile Documents/iCloud~com~takeoff~forcev/Documents/ForceData"
   );
 }
 
