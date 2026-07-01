@@ -24,7 +24,8 @@ echo "  Node $(node --version) ok"
 mkdir -p "$DEST"
 curl -fsSL "$RAW/forcelab-server.mjs" -o "$DEST/forcelab-server.mjs"
 curl -fsSL "$RAW/forcev-server.mjs"   -o "$DEST/forcev-server.mjs"
-echo "  server installato in $DEST"
+curl -fsSL "$RAW/migrate.sh"          -o "$DEST/migrate.sh" && chmod +x "$DEST/migrate.sh"
+echo "  server + migrate.sh installati in $DEST"
 
 # 3) Registra 'forcev' in Claude Desktop (merge: non tocca gli altri connettori)
 mkdir -p "$(dirname "$CFG")"

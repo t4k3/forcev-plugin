@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createRequire as _cr } from 'module'; const require = _cr(import.meta.url);
+import { createRequire as _cr } from "module"; const require = _cr(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -15210,17 +15210,54 @@ var StreamableHTTPServerTransport = class {
 
 // src/index.ts
 import { createServer as createHttpServer } from "node:http";
-import { mkdirSync, writeFileSync, readFileSync as readFileSync2, existsSync as existsSync2, copyFileSync } from "node:fs";
-import { join as join2, dirname } from "node:path";
+import { mkdirSync, writeFileSync, readFileSync as readFileSync2, existsSync as existsSync3, copyFileSync, readdirSync } from "node:fs";
+import { join as join3, dirname as dirname2 } from "node:path";
 import { homedir as homedir2 } from "node:os";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // src/store.ts
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { readFileSync, existsSync } from "node:fs";
-var DEFAULT_BASE = join(
+import { join as join2 } from "node:path";
+
+// src/icloud.ts
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
+var execFileAsync = promisify(execFile);
+var BRCTL = process.env.FORCELAB_BRCTL ?? "/usr/bin/brctl";
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function placeholderPath(realPath) {
+  return join(dirname(realPath), `.${basename(realPath)}.icloud`);
+}
+function isMaterialized(realPath) {
+  return existsSync(realPath) && !existsSync(placeholderPath(realPath));
+}
+async function requestDownload(realPath) {
+  try {
+    await execFileAsync(BRCTL, ["download", realPath], { timeout: 4e3 });
+  } catch {
+  }
+}
+async function refreshIfManaged(realPath) {
+  await requestDownload(realPath);
+}
+async function ensureDownloaded(realPath, timeoutMs = 15e3) {
+  if (isMaterialized(realPath)) return true;
+  const deadline = Date.now() + timeoutMs;
+  await requestDownload(realPath);
+  while (Date.now() < deadline) {
+    if (isMaterialized(realPath)) return true;
+    await sleep(300);
+  }
+  return isMaterialized(realPath);
+}
+
+// src/store.ts
+import { readFileSync, existsSync as existsSync2 } from "node:fs";
+var DEFAULT_BASE = join2(
   homedir(),
   "Library/Mobile Documents/iCloud~com~takeoff~forcelab/Documents/ForceData"
 );
@@ -15248,9 +15285,15 @@ var TTL_MS = 5e3;
 async function loadAll() {
   const now = Date.now();
   if (cache.ts && now - cache.ts < TTL_MS && cache.players && cache.logs) return;
-  const tpRaw = await readFile(join(BASE, "TeamsPlayers.json"), "utf8");
+  const tpPath = join2(BASE, "TeamsPlayers.json");
+  const lsPath = join2(BASE, "LogsSync.json");
+  await Promise.all([
+    isMaterialized(tpPath) ? refreshIfManaged(tpPath) : ensureDownloaded(tpPath),
+    isMaterialized(lsPath) ? refreshIfManaged(lsPath) : ensureDownloaded(lsPath)
+  ]);
+  const tpRaw = await readFile(tpPath, "utf8");
   const tp = JSON.parse(tpRaw);
-  const lsRaw = await readFile(join(BASE, "LogsSync.json"), "utf8");
+  const lsRaw = await readFile(lsPath, "utf8");
   const ls = JSON.parse(lsRaw);
   cache = {
     players: tp.players ?? [],
@@ -15330,7 +15373,10 @@ async function findLogBySessionRef(session) {
   return logs.find((l) => l.logFile === q) ?? logs.find((l) => l.id.toLowerCase() === lower) ?? logs.find((l) => l.logFile.toLowerCase() === lower);
 }
 function logFilePath(logFile) {
-  return join(BASE, logFile);
+  return join2(BASE, logFile);
+}
+async function ensureForceFileAvailable(logFile, timeoutMs = 15e3) {
+  return ensureDownloaded(logFilePath(logFile), timeoutMs);
 }
 var CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -15353,11 +15399,11 @@ function rangeValid(offset, end, len) {
 }
 function parseForceFile(logFile) {
   const path = logFilePath(logFile);
-  if (!existsSync(path)) {
-    const placeholder = join(BASE, `.${logFile}.icloud`);
-    if (existsSync(placeholder)) {
+  if (!existsSync2(path)) {
+    const placeholder = join2(BASE, `.${logFile}.icloud`);
+    if (existsSync2(placeholder)) {
       throw new Error(
-        `Data file "${logFile}" is not downloaded from iCloud yet (placeholder only). Open it on the Mac to trigger download, then retry.`
+        `Data file "${logFile}" is still not downloaded from iCloud after an auto-download attempt (placeholder only). iCloud may be slow or offline \u2014 retry shortly.`
       );
     }
     throw new Error(`Data file not found on disk: ${logFile}`);
@@ -15549,6 +15595,16 @@ var tools = [
       },
       additionalProperties: false
     }
+  },
+  {
+    name: "migra_da_forcelab",
+    description: "Avvia la migrazione dei dati da ForceLab a Force V (store SwiftData + curve + video). Gira in BACKGROUND ed \xE8 completa (usa lo script migrate.sh, non comandi improvvisati). Ritorna subito; usa 'stato_migrazione' per il progresso.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "stato_migrazione",
+    description: "Progresso della migrazione ForceLab -> Force V: curve copiate/totali, video copiati/totali, e se ha finito. Chiamalo ripetutamente per mostrare l'avanzamento all'utente.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
   }
 ];
 function buildServer() {
@@ -15575,6 +15631,10 @@ function buildServer() {
           return ok(await exportSessionCsv(args));
         case "detect_mislabeled_sessions":
           return ok(await detectMislabeledSessions(args));
+        case "migra_da_forcelab":
+          return ok(await migraDaForcelab());
+        case "stato_migrazione":
+          return ok(await statoMigrazione());
         default:
           return err(`Unknown tool: ${name}`);
       }
@@ -15583,6 +15643,51 @@ function buildServer() {
     }
   });
   return server;
+}
+var MIGRATE_SH = join3(homedir2(), ".forcev", "migrate.sh");
+var STATUS_FILE = join3(homedir2(), ".forcev", "migrate-status.json");
+function countFiles(dir) {
+  try {
+    return readdirSync(dir, { withFileTypes: true }).filter((d) => d.isFile()).length;
+  } catch {
+    return 0;
+  }
+}
+async function migraDaForcelab() {
+  if (!existsSync3(MIGRATE_SH)) {
+    throw new Error(
+      `Script di migrazione non trovato (${MIGRATE_SH}). Reinstalla il connettore Force V.`
+    );
+  }
+  const child = spawn("bash", [MIGRATE_SH, "--go"], { detached: true, stdio: "ignore" });
+  child.unref();
+  return {
+    started: true,
+    message: "Migrazione avviata in background (store + curve + video). Chiama 'stato_migrazione' per vedere l'avanzamento."
+  };
+}
+async function statoMigrazione() {
+  if (!existsSync3(STATUS_FILE)) {
+    return {
+      avviata: false,
+      nota: "Nessuna migrazione avviata. Usa 'migra_da_forcelab' per partire."
+    };
+  }
+  let s = {};
+  try {
+    s = JSON.parse(readFileSync2(STATUS_FILE, "utf8"));
+  } catch {
+  }
+  const curveDone = countFiles(s.tgtCache || "");
+  const videoDone = countFiles(s.tgtVCache || "");
+  const done = s.phase === "done";
+  return {
+    fase: s.phase || "?",
+    curve: `${curveDone}/${s.curveTot ?? 0}`,
+    video: `${videoDone}/${s.videoTot ?? 0}`,
+    done,
+    nota: done ? "Migrazione completata \u2705 \u2014 rilancia Force V." : "In corso \u2014 richiama 'stato_migrazione' tra qualche secondo."
+  };
 }
 async function listAthletes() {
   const players = await getPlayers();
@@ -15682,6 +15787,7 @@ async function exportSessionCsv(args) {
   const inline = !!args.inline;
   const log = await findLogBySessionRef(args.session);
   if (!log) throw new Error(`Session not found in index: ${args.session}`);
+  await ensureForceFileAvailable(log.logFile);
   const parsed = parseForceFile(log.logFile);
   const byTime = /* @__PURE__ */ new Map();
   const touch = (t) => {
@@ -15744,9 +15850,9 @@ async function exportSessionCsv(args) {
   ];
   const csvBody = dataRows.map((r) => r.join(","));
   const csvText = header.concat(csvBody).join("\n") + "\n";
-  const exportDir = join2(dataDir(), "exports");
+  const exportDir = join3(dataDir(), "exports");
   mkdirSync(exportDir, { recursive: true });
-  const csvPath = join2(exportDir, `${log.logFile}.csv`);
+  const csvPath = join3(exportDir, `${log.logFile}.csv`);
   writeFileSync(csvPath, csvText, "utf8");
   const headPreview = csvBody.slice(0, 5);
   const tailPreview = csvBody.slice(-5);
@@ -15793,6 +15899,7 @@ async function detectMislabeledSessions(args) {
   for (const l of logs) {
     let parsed;
     try {
+      await ensureForceFileAvailable(l.logFile, 5e3);
       parsed = parseForceFile(l.logFile);
     } catch (e) {
       skipped.push({ logFile: l.logFile, reason: e instanceof Error ? e.message : String(e) });
@@ -15915,7 +16022,7 @@ async function runHttp() {
   });
 }
 function claudeDesktopConfigPath() {
-  return join2(
+  return join3(
     homedir2(),
     "Library/Application Support/Claude/claude_desktop_config.json"
   );
@@ -15925,10 +16032,10 @@ function selfPath() {
 }
 function installToClaudeDesktop() {
   const cfgPath = claudeDesktopConfigPath();
-  const dir = dirname(cfgPath);
+  const dir = dirname2(cfgPath);
   mkdirSync(dir, { recursive: true });
   let cfg = {};
-  if (existsSync2(cfgPath)) {
+  if (existsSync3(cfgPath)) {
     try {
       cfg = JSON.parse(readFileSync2(cfgPath, "utf8")) || {};
       const bak = `${cfgPath}.forcelab-bak`;
@@ -15950,7 +16057,7 @@ function installToClaudeDesktop() {
 }
 function uninstallFromClaudeDesktop() {
   const cfgPath = claudeDesktopConfigPath();
-  if (!existsSync2(cfgPath)) {
+  if (!existsSync3(cfgPath)) {
     console.error("[forcelab-mcp] nessun config trovato, niente da rimuovere.");
     return;
   }
