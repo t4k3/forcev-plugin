@@ -1,0 +1,12 @@
+{
+  "name": "forcev",
+  "version": "1.0.0",
+  "description": "Force V — connettore dati locale (iCloud sul Mac) + skill di analisi (CMJ), export Excel e migrazione da ForceLab. Flusso: iPad/iPhone registra i test → iCloud sincronizza → sul Mac Claude analizza.",
+  "author": { "name": "t4k3" },
+  "mcpServers": {
+    "forcev": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/server/forcev-server.mjs"]
+    }
+  }
+}

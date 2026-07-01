@@ -1,0 +1,15 @@
+{
+  "name": "forcev",
+  "owner": { "name": "t4k3" },
+  "metadata": {
+    "description": "Marketplace Force V per Claude — connettore dati + skill.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "forcev",
+      "source": "./plugins/forcev",
+      "description": "Force V: connettore dati (iCloud, locale sul Mac) + skill CMJ / export Excel / migrazione da ForceLab. Un'unica installazione porta MCP e skill insieme."
+    }
+  ]
+}
