@@ -15210,14 +15210,14 @@ var StreamableHTTPServerTransport = class {
 
 // src/index.ts
 import { createServer as createHttpServer } from "node:http";
-import { mkdirSync, writeFileSync, readFileSync as readFileSync2, existsSync as existsSync3, copyFileSync, readdirSync } from "node:fs";
+import { mkdirSync, writeFileSync, readFileSync as readFileSync2, existsSync as existsSync3, copyFileSync, readdirSync, statSync } from "node:fs";
 import { join as join3, dirname as dirname2 } from "node:path";
 import { homedir as homedir2 } from "node:os";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 // src/store.ts
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join as join2 } from "node:path";
 
@@ -15291,6 +15291,11 @@ async function loadAll() {
     isMaterialized(tpPath) ? refreshIfManaged(tpPath) : ensureDownloaded(tpPath),
     isMaterialized(lsPath) ? refreshIfManaged(lsPath) : ensureDownloaded(lsPath)
   ]);
+  const [tpStat, lsStat] = await Promise.all([stat(tpPath), stat(lsPath)]);
+  if (cache.players && cache.logs && tpStat.mtimeMs === cache.tpMtime && lsStat.mtimeMs === cache.lsMtime) {
+    cache.ts = now;
+    return;
+  }
   const tpRaw = await readFile(tpPath, "utf8");
   const tp = JSON.parse(tpRaw);
   const lsRaw = await readFile(lsPath, "utf8");
@@ -15299,7 +15304,9 @@ async function loadAll() {
     players: tp.players ?? [],
     teams: tp.teams ?? [],
     logs: ls.logs ?? [],
-    ts: now
+    ts: now,
+    tpMtime: tpStat.mtimeMs,
+    lsMtime: lsStat.mtimeMs
   };
 }
 async function getPlayers() {
@@ -15787,6 +15794,33 @@ async function exportSessionCsv(args) {
   const inline = !!args.inline;
   const log = await findLogBySessionRef(args.session);
   if (!log) throw new Error(`Session not found in index: ${args.session}`);
+  const exportDirPath = join3(dataDir(), "exports");
+  const csvOutPath = join3(
+    exportDirPath,
+    decimate > 1 ? `${log.logFile}.d${decimate}.csv` : `${log.logFile}.csv`
+  );
+  if (!inline && existsSync3(csvOutPath)) {
+    try {
+      const csvStat = statSync(csvOutPath);
+      const binStat = statSync(join3(dataDir(), log.logFile));
+      if (csvStat.mtimeMs > binStat.mtimeMs && csvStat.size > 0) {
+        const all = readFileSync2(csvOutPath, "utf8").trimEnd().split("\n");
+        const hdrIdx = all.findIndex((l) => !l.startsWith("#"));
+        const body = hdrIdx >= 0 ? all.slice(hdrIdx + 1) : [];
+        return {
+          csvPath: csvOutPath,
+          columns: hdrIdx >= 0 ? all[hdrIdx].split(",") : [],
+          rowCount: body.length,
+          decimate,
+          cached: true,
+          headPreview: body.slice(0, 5),
+          tailPreview: body.slice(-5),
+          note: "CSV riusato: gi\xE0 esportato e binario sorgente invariato."
+        };
+      }
+    } catch {
+    }
+  }
   await ensureForceFileAvailable(log.logFile);
   const parsed = parseForceFile(log.logFile);
   const byTime = /* @__PURE__ */ new Map();
@@ -15850,9 +15884,8 @@ async function exportSessionCsv(args) {
   ];
   const csvBody = dataRows.map((r) => r.join(","));
   const csvText = header.concat(csvBody).join("\n") + "\n";
-  const exportDir = join3(dataDir(), "exports");
-  mkdirSync(exportDir, { recursive: true });
-  const csvPath = join3(exportDir, `${log.logFile}.csv`);
+  mkdirSync(exportDirPath, { recursive: true });
+  const csvPath = csvOutPath;
   writeFileSync(csvPath, csvText, "utf8");
   const headPreview = csvBody.slice(0, 5);
   const tailPreview = csvBody.slice(-5);
